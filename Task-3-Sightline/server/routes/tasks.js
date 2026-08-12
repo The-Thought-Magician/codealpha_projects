@@ -6,6 +6,11 @@ const realtime = require('../realtime');
 
 const STATUSES = ['todo', 'doing', 'review', 'done'];
 
+function parsePositiveId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 const TASK_SELECT = `
   SELECT t.id, t.project_id, t.title, t.body, t.status, t.position, t.created_at,
          t.assignee_id, u.name AS assignee_name,
@@ -35,7 +40,9 @@ async function fetchTask(id) {
 
 // Resolves a task id to its project and checks membership on that project.
 async function loadTask(req, res, next) {
-  const taskId = Number(req.params.taskId);
+  const taskId = parsePositiveId(req.params.taskId);
+  if (!taskId) return res.status(400).json({ error: 'Bad task id.' });
+
   const { rows } = await db.query('SELECT project_id FROM tasks WHERE id = $1', [taskId]);
   if (!rows[0]) return res.status(404).json({ error: 'No such task.' });
 
@@ -52,9 +59,12 @@ async function loadTask(req, res, next) {
 
 async function assigneeIdFor(projectId, value) {
   if (value === null || value === undefined || value === '') return null;
+  const assigneeId = parsePositiveId(value);
+  if (!assigneeId) throw Object.assign(new Error('Bad assignee id.'), { status: 400 });
+
   const { rows } = await db.query(
     'SELECT user_id FROM project_members WHERE project_id = $1 AND user_id = $2',
-    [projectId, Number(value)]
+    [projectId, assigneeId]
   );
   if (!rows[0]) throw Object.assign(new Error('That person is not on this project.'), { status: 400 });
   return rows[0].user_id;
