@@ -68,7 +68,12 @@ function connectSignalling() {
 function handleData(peerId, name, raw) {
   if (raw instanceof ArrayBuffer) return Transfer.receiveChunk(peerId, raw);
 
-  const message = JSON.parse(raw);
+  let message;
+  try {
+    message = JSON.parse(raw);
+  } catch {
+    return;
+  }
   if (message.kind === 'stroke') return Whiteboard.receive(message.stroke);
   if (message.kind === 'board-clear') return Whiteboard.clear(false);
   if (message.kind === 'board-request') {

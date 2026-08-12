@@ -7,7 +7,7 @@ const router = express.Router();
 
 function slugify(name) {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-  return `${base || 'room'}-${crypto.randomBytes(3).toString('hex')}`;
+  return `${base || 'room'}-${crypto.randomBytes(16).toString('hex')}`;
 }
 
 function toRoom(row) {

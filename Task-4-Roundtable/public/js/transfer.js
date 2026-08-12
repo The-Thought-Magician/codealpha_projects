@@ -7,6 +7,8 @@ const Transfer = (() => {
   const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
   const incoming = new Map();
+  const activeIncomingByPeer = new Map();
+  let outgoingInFlight = false;
   let onProgress = () => {};
   let onComplete = () => {};
 
@@ -20,6 +22,7 @@ const Transfer = (() => {
   }
 
   async function send(file) {
+    if (outgoingInFlight) throw new Error('Wait for the current file to finish sending.');
     if (file.size > MAX_FILE_BYTES) {
       throw new Error('Files are limited to 100 MB.');
     }
@@ -29,28 +32,33 @@ const Transfer = (() => {
 
     const id = nextId();
     const meta = { kind: 'file-start', id, name: file.name, size: file.size, mime: file.type };
-    channels.forEach((channel) => channel.send(JSON.stringify(meta)));
+    outgoingInFlight = true;
+    try {
+      channels.forEach((channel) => channel.send(JSON.stringify(meta)));
 
-    let sent = 0;
-    const reader = file.stream().getReader();
+      let sent = 0;
+      const reader = file.stream().getReader();
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
 
-      for (let offset = 0; offset < value.byteLength; offset += CHUNK_SIZE) {
-        const chunk = value.slice(offset, offset + CHUNK_SIZE);
-        for (const channel of channels) {
-          await drain(channel);
-          channel.send(chunk);
+        for (let offset = 0; offset < value.byteLength; offset += CHUNK_SIZE) {
+          const chunk = value.slice(offset, offset + CHUNK_SIZE);
+          for (const channel of channels) {
+            await drain(channel);
+            channel.send(chunk);
+          }
+          sent += chunk.byteLength;
+          onProgress({ direction: 'out', id, name: file.name, sent, size: file.size });
         }
-        sent += chunk.byteLength;
-        onProgress({ direction: 'out', id, name: file.name, sent, size: file.size });
       }
-    }
 
-    channels.forEach((channel) => channel.send(JSON.stringify({ kind: 'file-end', id })));
-    onComplete({ direction: 'out', id, name: file.name, size: file.size });
+      channels.forEach((channel) => channel.send(JSON.stringify({ kind: 'file-end', id })));
+      onComplete({ direction: 'out', id, name: file.name, size: file.size });
+    } finally {
+      outgoingInFlight = false;
+    }
   }
 
   // Data channels drop messages if the send buffer is allowed to run away, so
@@ -64,15 +72,18 @@ const Transfer = (() => {
   }
 
   function startReceiving(peerId, meta) {
+    if (activeIncomingByPeer.has(peerId)) return;
     incoming.set(`${peerId}:${meta.id}`, { ...meta, chunks: [], received: 0, peerId });
+    activeIncomingByPeer.set(peerId, meta.id);
   }
 
-  // Binary messages belong to whichever transfer from that peer is still open.
+  // Binary messages belong to the currently active transfer from that peer.
   function receiveChunk(peerId, buffer) {
-    const entry = [...incoming.entries()].find(([key]) => key.startsWith(`${peerId}:`));
-    if (!entry) return;
+    const transferId = activeIncomingByPeer.get(peerId);
+    if (!transferId) return;
+    const transfer = incoming.get(`${peerId}:${transferId}`);
+    if (!transfer) return;
 
-    const [, transfer] = entry;
     transfer.chunks.push(buffer);
     transfer.received += buffer.byteLength;
     onProgress({
@@ -89,6 +100,7 @@ const Transfer = (() => {
     const transfer = incoming.get(key);
     if (!transfer) return;
     incoming.delete(key);
+    if (activeIncomingByPeer.get(peerId) === id) activeIncomingByPeer.delete(peerId);
 
     const blob = new Blob(transfer.chunks, { type: transfer.mime || 'application/octet-stream' });
     onComplete({

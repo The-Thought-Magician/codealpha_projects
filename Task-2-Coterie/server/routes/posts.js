@@ -5,6 +5,11 @@ const { requireLogin } = require('../auth');
 const router = express.Router();
 const MAX_BODY = 800;
 
+function parsePositiveId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 // Every post listing needs the same author, circle, and counter columns.
 const POST_SELECT = `
   SELECT p.id, p.body, p.created_at,
@@ -74,16 +79,21 @@ router.post('/', requireLogin, async (req, res) => {
 });
 
 router.delete('/:id', requireLogin, async (req, res) => {
+  const postId = parsePositiveId(req.params.id);
+  if (!postId) return res.status(400).json({ error: 'Bad post id.' });
+
   const { rowCount } = await db.query(
     'DELETE FROM posts WHERE id = $1 AND author_id = $2',
-    [Number(req.params.id), req.userId]
+    [postId, req.userId]
   );
   if (!rowCount) return res.status(404).json({ error: 'That post is not yours to delete.' });
   res.status(204).end();
 });
 
 router.post('/:id/like', requireLogin, async (req, res) => {
-  const postId = Number(req.params.id);
+  const postId = parsePositiveId(req.params.id);
+  if (!postId) return res.status(400).json({ error: 'Bad post id.' });
+
   const removed = await db.query(
     'DELETE FROM likes WHERE post_id = $1 AND user_id = $2',
     [postId, req.userId]
@@ -102,11 +112,14 @@ router.post('/:id/like', requireLogin, async (req, res) => {
 });
 
 router.get('/:id/comments', requireLogin, async (req, res) => {
+  const postId = parsePositiveId(req.params.id);
+  if (!postId) return res.status(400).json({ error: 'Bad post id.' });
+
   const { rows } = await db.query(
     `SELECT m.id, m.body, m.created_at, m.author_id, u.handle, u.display_name
      FROM comments m JOIN users u ON u.id = m.author_id
      WHERE m.post_id = $1 ORDER BY m.created_at`,
-    [Number(req.params.id)]
+    [postId]
   );
   res.json(rows.map((row) => ({
     id: row.id,
@@ -118,6 +131,9 @@ router.get('/:id/comments', requireLogin, async (req, res) => {
 });
 
 router.post('/:id/comments', requireLogin, async (req, res) => {
+  const postId = parsePositiveId(req.params.id);
+  if (!postId) return res.status(400).json({ error: 'Bad post id.' });
+
   const body = String(req.body.body || '').trim();
   if (!body) return res.status(400).json({ error: 'Write something first.' });
 
@@ -125,7 +141,7 @@ router.post('/:id/comments', requireLogin, async (req, res) => {
     const { rows } = await db.query(
       `INSERT INTO comments (post_id, author_id, body) VALUES ($1,$2,$3)
        RETURNING id, body, created_at`,
-      [Number(req.params.id), req.userId, body]
+      [postId, req.userId, body]
     );
     res.status(201).json({
       id: rows[0].id,
@@ -140,9 +156,12 @@ router.post('/:id/comments', requireLogin, async (req, res) => {
 });
 
 router.delete('/comments/:id', requireLogin, async (req, res) => {
+  const commentId = parsePositiveId(req.params.id);
+  if (!commentId) return res.status(400).json({ error: 'Bad comment id.' });
+
   const { rowCount } = await db.query(
     'DELETE FROM comments WHERE id = $1 AND author_id = $2',
-    [Number(req.params.id), req.userId]
+    [commentId, req.userId]
   );
   if (!rowCount) return res.status(404).json({ error: 'That comment is not yours to delete.' });
   res.status(204).end();
